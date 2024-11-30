@@ -26,9 +26,8 @@ export const config = {
 
 export async function POST(req: NextApiRequest) {
   const form = new formidable.IncomingForm();
-
   return new Promise((resolve, reject) => {
-    form.parse(req, async (err, fields, files: FormidableFiles) => {
+    form.parse(req, async (err, fields, files) => {
       if (err) {
         return reject(new NextResponse('Error parsing the file', { status: 500 }));
       }
