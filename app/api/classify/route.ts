@@ -1,56 +1,123 @@
-// animal-image-classifier/app/api/classify/route.ts
-import { NextResponse } from 'next/server';
-import formidable from 'formidable';
-import { exec } from 'child_process';
-import util from 'util';
-import path from 'path';
-import { NextApiRequest } from 'next';
+import { NextResponse } from "next/server";
+import fetch from "node-fetch";
+import OpenAI from "openai";
 
-// Define the expected structure of the files object
-interface FormidableFiles {
-  file: Array<{
-    filepath: string;
-    originalFilename: string;
-    mimetype: string;
-    size: number;
-  }>;
+export const runtime = "nodejs";
+
+// Initialize OpenAI API client
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY, // Ensure your API key is in the environment variables
+});
+
+interface WikipediaResponse {
+  extract?: string;
+  title?: string;
+  description?: string;
+  [key: string]: any;
 }
 
-const execPromise = util.promisify(exec);
+export async function POST(req: Request) {
+  const contentType = req.headers.get("content-type") || "";
+  if (!contentType.includes("multipart/form-data")) {
+    return NextResponse.json(
+      { error: "Content-Type must be multipart/form-data" },
+      { status: 400 }
+    );
+  }
 
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
+  const formData = await req.formData();
+  const file = formData.get("file");
 
-export async function POST(req: NextApiRequest) {
-  const form = new formidable.IncomingForm();
-  return new Promise((resolve, reject) => {
-    form.parse(req, async (err, fields, files) => {
-      if (err) {
-        return reject(new NextResponse('Error parsing the file', { status: 500 }));
-      }
+  if (!file || !(file instanceof File)) {
+    return NextResponse.json({ error: "Invalid file upload" }, { status: 400 });
+  }
 
-      const uploadedFiles = files.file; // Access the files using the correct key
-      if (!uploadedFiles || uploadedFiles.length === 0) {
-        return reject(new NextResponse('No files uploaded', { status: 400 }));
-      }
+  try {
+    // Mock classification result for testing purposes
+    const mockResult =
+      "The image is classified as 'Cat' with a confidence of 95.00%";
 
-      const imagePath = uploadedFiles[0].filepath; // Now TypeScript should recognize this
-      const labels = 'cat dog lion tiger elephant rabbit bear fox wolf giraffe zebra'; // Example labels
-      const scriptPath = path.join(process.cwd(), 'ImageClassification.py'); // Adjust path if necessary
+    // Uncomment the following code to integrate real image classification logic
+    /*
+    const fs = require("fs");
+    const { exec } = require("child_process");
+    const path = require("path");
 
-      try {
-        const { stdout, stderr } = await execPromise(`python3 ${scriptPath} ${imagePath} <<< "${labels}"`);
-        if (stderr) {
-          throw new Error(stderr);
-        }
-        resolve(NextResponse.json({ result: stdout }));
-      } catch (error) {
-        console.error('Error classifying image:', error);
-        reject(new NextResponse('Error classifying the image', { status: 500 }));
-      }
+    // Save the uploaded image temporarily
+    const tempPath = path.join("/tmp", file.name);
+    fs.writeFileSync(tempPath, await file.arrayBuffer());
+
+    // Run the Python script for real classification
+    const labels = ["Cat", "Dog", "Horse", "Bird"];
+    const pythonScriptPath = "/path/to/ImageClassification.py"; // Update this to your script path
+    const command = `python ${pythonScriptPath} ${tempPath} ${labels.join(" ")}`;
+
+    const execPromise = new Promise<string>((resolve, reject) => {
+      exec(command, (error, stdout, stderr) => {
+        if (error) return reject(stderr || error.message);
+        resolve(stdout.trim());
+      });
     });
-  });
+
+    const actualResult = await execPromise;
+    */
+
+    const regex = /'([^']+)'/;
+    const match = mockResult.match(regex);
+    const animalName = match ? match[1] : "Unknown";
+
+    const wikiResponse = await fetch(
+      `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(
+        animalName
+      )}`
+    );
+
+    if (!wikiResponse.ok) {
+      return NextResponse.json(
+        { error: "Failed to fetch Wikipedia data" },
+        { status: 500 }
+      );
+    }
+
+    const wikiData = (await wikiResponse.json()) as WikipediaResponse;
+    const description = wikiData.extract || "No description available.";
+
+    // Use OpenAI to analyze if the animal is dangerous
+    const aiResponse = await openai.chat.completions.create({
+      model: "gpt-4",
+      messages: [
+        {
+          role: "system",
+          content: "You are an expert in animal safety analysis.",
+        },
+        {
+          role: "user",
+          content: `
+            Analyze the following animal description and determine if it is dangerous. 
+            Respond with "Yes, it is dangerous" or "No, it is not dangerous."
+            Description: "${description}"
+          `,
+        },
+      ],
+      max_tokens: 50,
+      temperature: 0.7,
+    });
+
+    const aiResult = aiResponse.choices[0].message?.content?.trim();
+    const isDangerous = aiResult?.toLowerCase().includes("yes");
+
+    const response = {
+      classification: mockResult, // Replace with `actualResult` when using real classification
+      description,
+      isDangerous,
+    };
+
+    return NextResponse.json(response);
+  } catch (error) {
+    console.error("Error processing request:", error);
+    return NextResponse.json(
+      { error: "Error processing request" },
+      { status: 500 }
+    );
+  }
 }
